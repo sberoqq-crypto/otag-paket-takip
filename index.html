@@ -119,7 +119,7 @@
 
 <script>
 /* ======= AYAR: Apps Script Web App URL'ini buraya yapıştır ======= */
-const API_URL = "https://script.google.com/macros/library/d/1fOUNkXYjyydh2YDwBX0bFO5-MVUw2eQurfAbTWLzPi0p6R8nNw_4dpaV/3";
+const API_URL = "https://script.google.com/macros/library/d/1fOUNkXYjyydh2YDwBX0bFO5-MVUw2eQurfAbTWLzPi0p6R8nNw_4dpaV/4";
 /* =================================================================== */
 
 let session = JSON.parse(localStorage.getItem("otag_session") || "null");
@@ -220,28 +220,42 @@ function renderOrderList() {
   wrap.className = "";
   wrap.innerHTML = currentOrders
     .sort((a, b) => (a.Durum === "Teslim Edildi" ? 1 : -1))
-    .map(
-      (o) => `
+    .map((o) => {
+      const sahipsiz = !String(o.KuryeAdi || "").trim();
+      return `
     <div class="order-card">
       <div class="order-top">
         <div>
           <div class="order-id">Sipariş #${o.SiparisID}</div>
-          <div class="order-name">${o.MusteriAdi}</div>
+          <div class="order-name">${o.MusteriAdi || "İsimsiz Müşteri"}</div>
         </div>
         <div class="order-amount">${Number(o.Tutar).toFixed(0)} ₺</div>
       </div>
       <div class="order-addr">📍 ${o.Adres || "-"}</div>
       ${o.Notlar && o.Durum === "Teslim Edildi" ? `<div class="order-addr">📝 ${o.Notlar}</div>` : ""}
       <span class="badge ${o.Durum === "Teslim Edildi" ? "teslim" : "bekliyor"}">${o.Durum}</span>
+      ${sahipsiz ? `<span class="badge" style="background:#2a1a0f; color:var(--accent2); margin-left:6px;">Sahipsiz</span>` : ""}
       ${
-        o.Durum !== "Teslim Edildi"
+        sahipsiz
+          ? `<button class="deliver-btn" style="background:var(--accent2); color:#fff;" onclick="claimOrder('${o.SiparisID}')">📦 Siparişi Üstlen</button>`
+          : o.Durum !== "Teslim Edildi"
           ? `<button class="deliver-btn" onclick="openDeliverForm('${o.SiparisID}')">✅ Teslim Edildi</button>`
           : ""
       }
     </div>
-  `
-    )
+  `;
+    })
     .join("");
+}
+
+async function claimOrder(siparisId) {
+  try {
+    const r = await api("claimOrder", { siparisId, isim: session.isim });
+    if (!r.ok) { alert(r.error); renderCourier(); return; }
+    renderCourier();
+  } catch (e) {
+    alert("Hata: " + e.message);
+  }
 }
 
 function openDeliverForm(siparisId) {
@@ -355,17 +369,16 @@ async function openNewOrderForm() {
       <h3>Yeni Sipariş Ekle</h3>
       <div class="muted">Sipariş bilgilerini gir</div>
 
-      <label>Müşteri Adı</label>
-      <input id="no-musteri" placeholder="Örn: Ayşe Yılmaz" />
-
       <label>Adres</label>
       <input id="no-adres" placeholder="Mahalle, cadde, no" />
 
       <label>Tutar (₺)</label>
       <input id="no-tutar" type="number" inputmode="decimal" placeholder="0" />
 
-      <label>Kurye</label>
-      <select id="no-kurye"><option value="">Yükleniyor...</option></select>
+      <label>Müşteri Adı (opsiyonel)</label>
+      <input id="no-musteri" placeholder="Biliniyorsa yaz, boş bırakabilirsin" />
+
+      <div class="muted" style="margin-top:14px;">Kurye ataması yapmıyoruz — sipariş "sahipsiz" olarak eklenecek, kuryeler kendi ekranından üstlenebilecek.</div>
 
       <div class="sheet-actions">
         <button class="btn-cancel" id="no-cancel">Vazgeç</button>
@@ -376,33 +389,19 @@ async function openNewOrderForm() {
   document.body.appendChild(overlay);
   overlay.querySelector("#no-cancel").onclick = () => overlay.remove();
 
-  // Kurye listesini doldur
-  try {
-    const r = await api("getCouriers", {});
-    const sel = overlay.querySelector("#no-kurye");
-    if (r.ok && r.couriers.length) {
-      sel.innerHTML = r.couriers.map((c) => `<option value="${c}">${c}</option>`).join("");
-    } else {
-      sel.innerHTML = `<option value="">Kurye bulunamadı</option>`;
-    }
-  } catch (e) {
-    overlay.querySelector("#no-kurye").innerHTML = `<option value="">Yüklenemedi</option>`;
-  }
-
   overlay.querySelector("#no-confirm").onclick = async () => {
     const musteriAdi = overlay.querySelector("#no-musteri").value.trim();
     const adres = overlay.querySelector("#no-adres").value.trim();
     const tutar = Number(overlay.querySelector("#no-tutar").value || 0);
-    const kuryeAdi = overlay.querySelector("#no-kurye").value;
 
-    if (!musteriAdi || !tutar || !kuryeAdi) {
-      alert("Müşteri adı, tutar ve kurye seçimi zorunlu.");
+    if (!adres || !tutar) {
+      alert("Adres ve tutar zorunlu.");
       return;
     }
     const btn = overlay.querySelector("#no-confirm");
     btn.textContent = "Ekleniyor...";
     try {
-      const r = await api("addOrder", { musteriAdi, adres, tutar, kuryeAdi });
+      const r = await api("addOrder", { musteriAdi, adres, tutar });
       if (!r.ok) throw new Error(r.error);
       overlay.remove();
       loadAdminBody();
@@ -458,8 +457,8 @@ async function loadAdminBody() {
         <div class="order-card">
           <div class="order-top">
             <div>
-              <div class="order-id">#${o.SiparisID} — ${o.KuryeAdi}</div>
-              <div class="order-name">${o.MusteriAdi}</div>
+              <div class="order-id">#${o.SiparisID} — ${o.KuryeAdi || "Sahipsiz"}</div>
+              <div class="order-name">${o.MusteriAdi || "İsimsiz Müşteri"}</div>
             </div>
             <div class="order-amount">${Number(o.Tutar).toFixed(0)} ₺</div>
           </div>
